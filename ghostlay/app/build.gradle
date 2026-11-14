@@ -1,0 +1,28 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'dev.ghostlay.demo'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'dev.ghostlay.demo'
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+    }
+    buildTypes {
+        release { minifyEnabled false }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // In-process only; touches no system settings (unlike `settings put global hidden_api_policy`).
+    implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:6.1'
+}
