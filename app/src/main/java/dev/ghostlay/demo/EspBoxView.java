@@ -5,31 +5,39 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.view.View;
 
-/** Draws a simple box in the center of the screen when ESP box is enabled. */
+/** Simple center box shown when ESP box is enabled (same idea as Hello World overlay). */
 public class EspBoxView extends View {
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     public EspBoxView(Context context) {
         super(context);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(6f);
-        paint.setColor(0xFFFF3B30); // red, matches default player color
+        stroke.setStyle(Paint.Style.STROKE);
+        stroke.setStrokeWidth(dp(4));
+        stroke.setColor(0xFFFF3B30);
+        fill.setStyle(Paint.Style.FILL);
+        fill.setColor(0x66FF3B30);
+    }
+
+    private float dp(float v) {
+        return v * getResources().getDisplayMetrics().density;
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        int size = (int) dp(120);
+        setMeasuredDimension(size, size);
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        int w = getWidth();
-        int h = getHeight();
-        if (w <= 0 || h <= 0) return;
-
-        float boxW = w * 0.28f;
-        float boxH = h * 0.32f;
-        float left = (w - boxW) / 2f;
-        float top = (h - boxH) / 2f;
-        float right = left + boxW;
-        float bottom = top + boxH;
-
-        canvas.drawRect(left, top, right, bottom, paint);
+        float pad = dp(4);
+        float left = pad;
+        float top = pad;
+        float right = getWidth() - pad;
+        float bottom = getHeight() - pad;
+        canvas.drawRect(left, top, right, bottom, fill);
+        canvas.drawRect(left, top, right, bottom, stroke);
     }
 }

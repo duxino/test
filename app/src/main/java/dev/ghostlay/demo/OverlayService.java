@@ -44,9 +44,12 @@ public class OverlayService extends Service {
     private int tries;
 
     // ESP box test overlay (center screen), shown when esp.box is true in config.
+    // Same method as Hello World: its own overlay window, alpha revealed after SkipCapture.
     private View boxOverlay;
-    private boolean boxShown;
-    private boolean boxSkipApplied;
+    private WindowManager.LayoutParams boxLp;
+    private boolean boxRevealed;
+    private int boxTries;
+    private boolean boxWanted;
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
@@ -166,8 +169,15 @@ public class OverlayService extends Service {
             new Thread(() -> {
                 final boolean boxOn = fetchEspBoxEnabled();
                 handler.post(() -> {
-                    updateEspBox(boxOn);
-                    handler.postDelayed(configPollRunnable, 700);
+                    boxWanted = boxOn;
+                    if (boxOn) {
+                        ensureEspBox();
+                    } else {
+                        hideEspBox();
+                    }
+                    if (wm != null) { // service still alive
+                        handler.postDelayed(configPollRunnable, 700);
+                    }
                 });
             }).start();
         }
@@ -197,23 +207,23 @@ public class OverlayService extends Service {
         }
     }
 
-    private void updateEspBox(boolean boxOn) {
-        if (boxOn && !boxShown) {
+    private void ensureEspBox() {
+        if (wm == null) return;
+        if (boxOverlay == null) {
             showEspBox();
-        } else if (!boxOn && boxShown) {
-            hideEspBox();
-        } else if (boxOn && boxOverlay != null && !boxSkipApplied) {
-            boxSkipApplied = SkipCapture.apply(boxOverlay, true);
+        } else if (boxRevealed) {
+            SkipCapture.apply(boxOverlay, true);
         }
     }
 
     private void showEspBox() {
-        if (wm == null || boxOverlay != null) return;
         try {
-            EspBoxView view = new EspBoxView(this);
-            WindowManager.LayoutParams blp = new WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.MATCH_PARENT,
+            View view = new EspBoxView(this);
+            view.setAlpha(0f); // same as Hello World: reveal after capture-skip is applied
+
+            boxLp = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -221,28 +231,55 @@ public class OverlayService extends Service {
                             | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                             | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                     PixelFormat.TRANSLUCENT);
-            blp.gravity = Gravity.TOP | Gravity.START;
-            blp.x = 0;
-            blp.y = 0;
-            wm.addView(view, blp);
+            boxLp.gravity = Gravity.CENTER;
+
             boxOverlay = view;
-            boxShown = true;
-            boxSkipApplied = SkipCapture.apply(view, true);
-            Log.i(TAG, "ESP box overlay shown");
+            boxRevealed = false;
+            boxTries = 0;
+            wm.addView(view, boxLp);
+            view.getViewTreeObserver().addOnGlobalLayoutListener(boxLayoutListener);
+            handler.post(boxApplyRunnable);
+            Log.i(TAG, "ESP box overlay added (waiting for capture-skip)");
         } catch (Exception e) {
             Log.e(TAG, "Failed to show ESP box overlay", e);
+            boxOverlay = null;
         }
     }
+
+    private final ViewTreeObserver.OnGlobalLayoutListener boxLayoutListener = () -> {
+        if (boxRevealed && boxOverlay != null) SkipCapture.apply(boxOverlay, true);
+    };
+
+    /** Same reveal method as Hello World, but failure does not stop the service. */
+    private final Runnable boxApplyRunnable = new Runnable() {
+        @Override public void run() {
+            if (boxOverlay == null || !boxWanted) return;
+            if (SkipCapture.apply(boxOverlay, true)) {
+                boxOverlay.setAlpha(1f);
+                boxRevealed = true;
+                Log.i(TAG, "ESP box hidden from capture after " + boxTries + " retries");
+            } else if (++boxTries < MAX_TRIES) {
+                handler.postDelayed(this, 50);
+            } else {
+                // Show it anyway so the test is visible even if capture-skip is unavailable.
+                boxOverlay.setAlpha(1f);
+                boxRevealed = true;
+                Log.w(TAG, "ESP box capture-skip failed; showing box anyway");
+                Toast.makeText(OverlayService.this, "Ghostlay: box shown (capture-skip failed)", Toast.LENGTH_SHORT).show();
+            }
+        }
+    };
 
     private void hideEspBox() {
         if (wm != null && boxOverlay != null) {
             try {
+                boxOverlay.getViewTreeObserver().removeOnGlobalLayoutListener(boxLayoutListener);
                 wm.removeView(boxOverlay);
             } catch (Exception ignored) { }
         }
         boxOverlay = null;
-        boxShown = false;
-        boxSkipApplied = false;
+        boxRevealed = false;
+        boxTries = 0;
     }
 
     @Override
