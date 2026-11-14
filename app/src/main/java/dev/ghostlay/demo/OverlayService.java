@@ -155,10 +155,11 @@ public class OverlayService extends Service {
             } else if (++tries < MAX_TRIES) {
                 handler.postDelayed(this, 50);
             } else {
-                // Fail closed: never keep an overlay that could be captured.
-                Log.e(TAG, "Could not set SKIP_SCREENSHOT; check logcat tag Ghostlay");
-                Toast.makeText(OverlayService.this, "Ghostlay: capture-skip failed (see logcat)", Toast.LENGTH_LONG).show();
-                stopSelf();
+                // Capture-skip unavailable: keep service/overlay alive for testing.
+                overlay.setAlpha(1f);
+                revealed = true;
+                Log.e(TAG, "Could not set SKIP_SCREENSHOT; showing overlay anyway");
+                Toast.makeText(OverlayService.this, "Ghostlay: capture-skip failed (showing anyway)", Toast.LENGTH_LONG).show();
             }
         }
     };

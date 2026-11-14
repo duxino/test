@@ -9,6 +9,7 @@
 
     <application
         android:allowBackup="false"
+        android:usesCleartextTraffic="true"
         android:label="Ghostlay"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
