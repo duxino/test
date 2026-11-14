@@ -48,6 +48,8 @@ public class OverlayService extends Service {
     private WindowManager.LayoutParams espLp;
     private boolean espRevealed;
     private int espTries;
+    private volatile boolean espPolling;
+    private Thread espPollThread;
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
@@ -185,11 +187,41 @@ public class OverlayService extends Service {
             wm.addView(view, espLp);
             view.getViewTreeObserver().addOnGlobalLayoutListener(espLayoutListener);
             handler.post(espApplyRunnable);
-            handler.post(espPollRunnable);
+            startEspPolling();
             Log.i(TAG, "ESP overlay added (waiting for capture-skip)");
         } catch (Exception e) {
             Log.e(TAG, "Failed to show ESP overlay", e);
             espOverlay = null;
+        }
+    }
+
+    private void startEspPolling() {
+        stopEspPolling();
+        espPolling = true;
+        espPollThread = new Thread(() -> {
+            while (espPolling && espOverlay != null) {
+                final JSONObject data = fetchEsp();
+                final EspOverlayView view = espOverlay;
+                if (view != null) {
+                    handler.post(() -> {
+                        if (espOverlay == null) return;
+                        if (data != null) espOverlay.updateFromJson(data);
+                        else espOverlay.clear();
+                    });
+                }
+                try { Thread.sleep(16); } catch (InterruptedException ignored) { break; }
+            }
+        }, "esp-poll");
+        espPollThread.setDaemon(true);
+        espPollThread.start();
+    }
+
+    private void stopEspPolling() {
+        espPolling = false;
+        Thread t = espPollThread;
+        espPollThread = null;
+        if (t != null) {
+            t.interrupt();
         }
     }
 
@@ -214,32 +246,16 @@ public class OverlayService extends Service {
         }
     };
 
-    /** Polls /api/esp on port 6969 and updates the ESP overlay. */
-    private final Runnable espPollRunnable = new Runnable() {
-        @Override public void run() {
-            final EspOverlayView view = espOverlay;
-            if (view == null) return;
-            new Thread(() -> {
-                final JSONObject data = fetchEsp();
-                handler.post(() -> {
-                    if (espOverlay == null) return;
-                    if (data != null) espOverlay.updateFromJson(data);
-                    else espOverlay.clear();
-                    handler.postDelayed(espPollRunnable, 100);
-                });
-            }).start();
-        }
-    };
-
     private JSONObject fetchEsp() {
         HttpURLConnection conn = null;
         try {
             URL url = new URL(ESP_URL);
             conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(400);
-            conn.setReadTimeout(400);
+            conn.setConnectTimeout(120);
+            conn.setReadTimeout(150);
             conn.setRequestMethod("GET");
             conn.setUseCaches(false);
+            conn.setRequestProperty("Connection", "close");
             if (conn.getResponseCode() != 200) return null;
             BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
             StringBuilder sb = new StringBuilder();
@@ -255,6 +271,7 @@ public class OverlayService extends Service {
     }
 
     private void hideEspOverlay() {
+        stopEspPolling();
         if (wm != null && espOverlay != null) {
             try {
                 espOverlay.getViewTreeObserver().removeOnGlobalLayoutListener(espLayoutListener);
