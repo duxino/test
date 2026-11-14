@@ -1,22 +1,30 @@
-# Ghostlay (TX9 ESP overlay test)
+# Ghostlay
 
-Based on the original Ghostlay demo: a floating overlay that is visible on the physical screen but hidden from screen recordings/screenshots/casting via SurfaceFlinger's `SKIP_SCREENSHOT` flag on the window's `SurfaceControl` layer.
+A floating "Hello World" box that is visible on the physical screen but absent from
+screen recordings, screenshots and casting. The recorder sees the real background, not black.
 
-This copy is adapted to draw **ESP Line/Box** (default test shapes) for the TX9 mod menu:
-- Full-screen transparent `TYPE_APPLICATION_OVERLAY` with a custom `OverlayDrawView` (line/box).
-- Starts with a default visible test (red box + bottom line) so behavior can be tested immediately.
-- Polls `http://127.0.0.1:6969/api/config` (TX9 modmenu_server) and applies `esp.line`, `esp.box`, `esp.linePosition`, `esp.boxStyle`, `esp.playerColor`. If the server is not reachable, the default test overlay remains visible.
-- Overlay is kept hidden from capture by reapplying `SKIP_SCREENSHOT` (Ghostlay mechanism). If the flag cannot be applied, the service stops (fail-closed).
+## How it works
+1. A normal `TYPE_APPLICATION_OVERLAY` window (touchable, draggable).
+2. Its `SurfaceControl` layer gets SurfaceFlinger's `SKIP_SCREENSHOT` flag (0x40), which
+   excludes the layer from anything rendered to a non-primary display (recording, mirroring).
+   AOSP uses the same flag for the mouse-pointer sprite.
+3. Hidden APIs are reached with `AndroidHiddenApiBypass`, scoped to `android.view.*`, in-process only.
+4. Root is used only to grant the app's own `SYSTEM_ALERT_WINDOW` / `POST_NOTIFICATIONS`.
+5. The overlay starts at alpha 0 and is revealed only after the flag is applied. If the flag
+   can't be applied, the service stops instead of showing a capturable overlay.
 
 ## Build
 Push to GitHub; the Actions workflow builds `app-debug.apk` (artifact). Locally: `gradle assembleDebug`.
 
-## Use with TX9
-1. Build/install this app and grant "Display over other apps" (root helper in app can grant its own appop) and start the overlay.
-2. Run `modmenu_server` on the same device (port 6969). Toggle ESP **Line/Box** and settings in the web panel to control the overlay.
-3. Test with a screen recorder: overlay should be visible on-device but absent/hidden in capture on supported devices/Android versions.
+## System footprint
+- No `settings put`, no SELinux changes, no remount, no files outside app data, no daemon.
+- Only change: the app's own appops grant. Undo with `su -c "appops reset dev.ghostlay.demo"` or uninstall.
+- The flag lives on the window's layer and disappears with the window.
 
-## Notes / limits
-- Uses hidden/internal APIs (`ViewRootImpl.getSurfaceControl`, `SurfaceControl.Transaction`) + `AndroidHiddenApiBypass`; behavior depends on Android version/device (same limits as Ghostlay).
-- Root in this app is only used to grant its own permissions; overlay capture-hiding itself relies on the system flag.
-- For use on your own device.
+## Known limits
+- Relies on non-SDK internals (`ViewRootImpl.getSurfaceControl`, `SurfaceControl.Transaction`); may need
+  adjusting per Android release. Failures are logged under the tag `Ghostlay`.
+- A just-recreated surface (rotation) may show for a frame before the flag is re-applied.
+- Apps that capture the physical display by other means (e.g. camera) are of course unaffected.
+
+For use on your own device. Don't use it to deceive people or bypass rules you've agreed to.

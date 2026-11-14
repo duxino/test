@@ -6,77 +6,35 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.concurrent.TimeUnit;
 
-/** Tiny `su` wrapper. Never call from the main thread (the su prompt blocks). */
+/** Tiny `su` wrapper. Never call from the main thread (the su prompt can block). */
 final class RootUtil {
     private static final String TAG = "Ghostlay";
 
-    // Magisk / SuperSU / KernelSU put `su` in different places; PATH from an app is minimal.
-    private static final String[] SU_PATHS = {
-            "su",
-            "/system/bin/su",
-            "/system/xbin/su",
-            "/sbin/su",
-            "/su/bin/su",
-            "/debug_ramdisk/su",
-            "/data/adb/ksu/bin/su",
-            "/data/adb/magisk/su"
-    };
+    private RootUtil() {}
 
-    private static String sLastError = "";
-
-    private RootUtil() {
-    }
-
-    static String lastError() {
-        return sLastError;
-    }
-
-    /** Runs one command as root; returns stdout+stderr, or null if su is unavailable / denied / timed out. */
+    /** Runs one command as root; returns stdout+stderr, or null if su is unavailable / timed out. */
     static String su(String cmd) {
-        sLastError = "";
-        boolean foundSu = false;
-        for (String path : SU_PATHS) {
-            try {
-                ProcessBuilder pb = new ProcessBuilder(path, "-c", cmd);
-                pb.redirectErrorStream(true);
-                Process p = pb.start();
-                // Wait first: the grant prompt can take a while; never block on readLine.
-                if (!p.waitFor(20, TimeUnit.SECONDS)) {
-                    p.destroyForcibly();
-                    sLastError = "su prompt timed out";
-                    continue;
-                }
-                foundSu = true;
-                StringBuilder out = new StringBuilder();
-                BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+        try {
+            Process p = new ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start();
+            StringBuilder out = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
                 String line;
                 while ((line = r.readLine()) != null) out.append(line).append('\n');
-                r.close();
-                String text = out.toString().trim();
-                if (text.length() > 0) return text;
-                sLastError = "su returned no output";
-            } catch (Exception e) {
-                // su binary not at this path: try the next one.
-                Log.w(TAG, "su path failed: " + path + " (" + e + ")");
             }
+            if (!p.waitFor(10, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return null;
+            }
+            return out.toString().trim();
+        } catch (Exception e) {
+            Log.w(TAG, "su failed: " + e);
+            return null;
         }
-        if (!foundSu) sLastError = "no su binary (device not rooted?)";
-        return null;
     }
 
     static boolean hasRoot() {
-        String out = su("id");
-        boolean root = out != null && out.contains("uid=0");
-        if (!root && out != null) sLastError = "su denied: " + out;
-        return root;
-    }
-
-    /** "granted", "denied", or "no su binary". Also triggers the Magisk/SuperSU prompt. */
-    static String status() {
-        String out = su("id");
-        if (out == null) return sLastError.length() > 0 ? sLastError : "no root";
-        if (out.contains("uid=0")) return "granted";
-        return "denied (" + out.replace('\n', ' ') + ")";
+        String r = su("id");
+        return r != null && r.contains("uid=0");
     }
 
     /** Normal per-app permission grants (what the Settings UI would do). Undo: `appops reset <pkg>`. */

@@ -6,18 +6,20 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.graphics.Color;
 import android.graphics.PixelFormat;
-import android.graphics.Rect;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
 import android.view.WindowManager;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONObject;
@@ -36,15 +38,17 @@ public class OverlayService extends Service {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager wm;
-    private OverlayDrawView overlay;
+    private TextView overlay;
     private WindowManager.LayoutParams lp;
     private boolean revealed;
     private int tries;
 
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
+    // ESP box test overlay (center screen), shown when esp.box is true in config.
+    private View boxOverlay;
+    private boolean boxShown;
+    private boolean boxSkipApplied;
+
+    @Override public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -53,149 +57,123 @@ public class OverlayService extends Service {
             return START_NOT_STICKY;
         }
         startInForeground();
-        if (overlay == null) {
-            showOverlay();
-        }
+        if (overlay == null) showOverlay();
         return START_NOT_STICKY;
     }
 
     private void startInForeground() {
         NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm != null && Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Overlay", NotificationManager.IMPORTANCE_MIN));
-        }
+        nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Overlay", NotificationManager.IMPORTANCE_MIN));
         PendingIntent stop = PendingIntent.getService(this, 0,
                 new Intent(this, OverlayService.class).setAction(ACTION_STOP),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification n = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_menu_view)
-                .setContentTitle("Ghostlay overlay running")
+                .setContentTitle("Ghostlay is running")
                 .setContentText("Tap to stop")
                 .setContentIntent(stop)
                 .setOngoing(true)
                 .build();
-        startForeground(1, n);
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(1, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else {
+            startForeground(1, n);
+        }
     }
 
     private void showOverlay() {
         wm = getSystemService(WindowManager.class);
-        if (wm == null) {
-            stopSelf();
-            return;
-        }
+        float d = getResources().getDisplayMetrics().density;
 
-        OverlayDrawView view = new OverlayDrawView(this);
-        view.setBackgroundColor(android.graphics.Color.TRANSPARENT); // never paint an opaque window
-        // Default test shapes (visible until config arrives): box + line in red.
-        view.update(true, true, "Bottom", "Simple", "#ff3b30");
-        view.setAlpha(0f); // reveal after SKIP_SCREENSHOT was attempted
-
-        int screenW;
-        int screenH;
-        if (Build.VERSION.SDK_INT >= 30) {
-            Rect bounds = wm.getCurrentWindowMetrics().getBounds();
-            screenW = bounds.width();
-            screenH = bounds.height();
-        } else {
-            DisplayMetrics dm = getResources().getDisplayMetrics();
-            screenW = dm.widthPixels;
-            screenH = dm.heightPixels;
-        }
-
-        int winFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+        TextView tv = new TextView(this);
+        tv.setText("Hello World");
+        tv.setTextSize(22);
+        tv.setTextColor(Color.BLACK);
+        int pad = (int) (20 * d);
+        tv.setPadding(pad, pad, pad, pad);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.WHITE);
+        bg.setCornerRadius(16 * d);
+        tv.setBackground(bg);
+        tv.setAlpha(0f); // invisible until the capture-skip flag is on, so no first frame leaks
 
         lp = new WindowManager.LayoutParams(
-                screenW,
-                screenH,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                winFlags,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
-        lp.x = 0;
-        lp.y = 0;
-        if (Build.VERSION.SDK_INT >= 28) {
-            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        }
+        lp.x = (int) (40 * d);
+        lp.y = (int) (200 * d);
 
-        overlay = view;
-        wm.addView(view, lp);
-        view.getViewTreeObserver().addOnGlobalLayoutListener(layoutListener);
+        tv.setOnTouchListener(new View.OnTouchListener() {
+            private int startX, startY;
+            private float downX, downY;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        startX = lp.x; startY = lp.y;
+                        downX = e.getRawX(); downY = e.getRawY();
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        lp.x = startX + (int) (e.getRawX() - downX);
+                        lp.y = startY + (int) (e.getRawY() - downY);
+                        wm.updateViewLayout(v, lp);
+                        return true;
+                }
+                return false;
+            }
+        });
+
+        overlay = tv;
+        wm.addView(tv, lp);
+        tv.getViewTreeObserver().addOnGlobalLayoutListener(layoutListener);
         handler.post(applyRunnable);
         handler.post(configPollRunnable);
     }
 
-    private final ViewTreeObserver.OnGlobalLayoutListener layoutListener = new ViewTreeObserver.OnGlobalLayoutListener() {
-        @Override
-        public void onGlobalLayout() {
-            if (revealed && overlay != null) {
-                SkipCapture.apply(overlay, true);
-            }
-        }
+    /** Re-applies the flag after relayouts (rotation, surface re-creation). */
+    private final ViewTreeObserver.OnGlobalLayoutListener layoutListener = () -> {
+        if (revealed && overlay != null) SkipCapture.apply(overlay, true);
     };
 
     private final Runnable applyRunnable = new Runnable() {
-        @Override
-        public void run() {
+        @Override public void run() {
             if (overlay == null) return;
             if (SkipCapture.apply(overlay, true)) {
                 overlay.setAlpha(1f);
                 revealed = true;
-                Log.i(TAG, "Overlay visible and hidden from capture (after " + tries + " retries)");
+                Log.i(TAG, "Overlay hidden from capture after " + tries + " retries");
             } else if (++tries < MAX_TRIES) {
                 handler.postDelayed(this, 50);
             } else {
-                // Still show the overlay: a visible overlay is more useful than none.
-                Log.e(TAG, "Could not set SKIP_SCREENSHOT; overlay will be visible in recordings");
-                overlay.setAlpha(1f);
-                revealed = true;
-                Toast.makeText(OverlayService.this,
-                        "Ghostlay: capture-skip failed, overlay is visible to recorders (see logcat)",
-                        Toast.LENGTH_LONG).show();
+                // Fail closed: never keep an overlay that could be captured.
+                Log.e(TAG, "Could not set SKIP_SCREENSHOT; check logcat tag Ghostlay");
+                Toast.makeText(OverlayService.this, "Ghostlay: capture-skip failed (see logcat)", Toast.LENGTH_LONG).show();
+                stopSelf();
             }
         }
     };
 
+    /** Polls TX9 config on port 6969 and shows/hides the center ESP box. */
     private final Runnable configPollRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (overlay == null) return;
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    final ConfigState st = fetchConfig();
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (overlay == null) return;
-                            if (st != null) {
-                                overlay.update(st.line, st.box, st.linePosition, st.boxStyle, st.playerColor);
-                                overlay.setVisibility(overlay.hasAnythingToDraw() ? View.VISIBLE : View.INVISIBLE);
-                                if (revealed) {
-                                    SkipCapture.apply(overlay, true);
-                                }
-                            } else {
-                                // server not reachable: keep default test overlay visible
-                                overlay.setVisibility(View.VISIBLE);
-                            }
-                        }
-                    });
-                }
+        @Override public void run() {
+            new Thread(() -> {
+                final boolean boxOn = fetchEspBoxEnabled();
+                handler.post(() -> {
+                    updateEspBox(boxOn);
+                    handler.postDelayed(configPollRunnable, 700);
+                });
             }).start();
-            handler.postDelayed(this, 700);
         }
     };
 
-    private static class ConfigState {
-        boolean line;
-        boolean box;
-        String linePosition = "Bottom";
-        String boxStyle = "Simple";
-        String playerColor = "#ff3b30";
-    }
-
-    private ConfigState fetchConfig() {
+    private boolean fetchEspBoxEnabled() {
         HttpURLConnection conn = null;
         try {
             URL url = new URL(CONFIG_URL);
@@ -204,41 +182,78 @@ public class OverlayService extends Service {
             conn.setReadTimeout(400);
             conn.setRequestMethod("GET");
             conn.setUseCaches(false);
-            int code = conn.getResponseCode();
-            if (code != 200) return null;
+            if (conn.getResponseCode() != 200) return false;
             BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
             StringBuilder sb = new StringBuilder();
             String line;
-            while ((line = br.readLine()) != null) {
-                sb.append(line);
-            }
+            while ((line = br.readLine()) != null) sb.append(line);
             br.close();
-            JSONObject root = new JSONObject(sb.toString());
-            JSONObject esp = root.optJSONObject("esp");
-            if (esp == null) return null;
-            ConfigState st = new ConfigState();
-            st.line = esp.optBoolean("line", false);
-            st.box = esp.optBoolean("box", false);
-            st.linePosition = esp.optString("linePosition", "Bottom");
-            st.boxStyle = esp.optString("boxStyle", "Simple");
-            st.playerColor = esp.optString("playerColor", "#ff3b30");
-            return st;
+            JSONObject esp = new JSONObject(sb.toString()).optJSONObject("esp");
+            return esp != null && esp.optBoolean("box", false);
         } catch (Exception e) {
-            return null;
+            return false;
         } finally {
             if (conn != null) conn.disconnect();
         }
     }
 
+    private void updateEspBox(boolean boxOn) {
+        if (boxOn && !boxShown) {
+            showEspBox();
+        } else if (!boxOn && boxShown) {
+            hideEspBox();
+        } else if (boxOn && boxOverlay != null && !boxSkipApplied) {
+            boxSkipApplied = SkipCapture.apply(boxOverlay, true);
+        }
+    }
+
+    private void showEspBox() {
+        if (wm == null || boxOverlay != null) return;
+        try {
+            EspBoxView view = new EspBoxView(this);
+            WindowManager.LayoutParams blp = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT);
+            blp.gravity = Gravity.TOP | Gravity.START;
+            blp.x = 0;
+            blp.y = 0;
+            wm.addView(view, blp);
+            boxOverlay = view;
+            boxShown = true;
+            boxSkipApplied = SkipCapture.apply(view, true);
+            Log.i(TAG, "ESP box overlay shown");
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to show ESP box overlay", e);
+        }
+    }
+
+    private void hideEspBox() {
+        if (wm != null && boxOverlay != null) {
+            try {
+                wm.removeView(boxOverlay);
+            } catch (Exception ignored) { }
+        }
+        boxOverlay = null;
+        boxShown = false;
+        boxSkipApplied = false;
+    }
+
     @Override
     public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        hideEspBox();
         if (overlay != null) {
             try {
                 overlay.getViewTreeObserver().removeOnGlobalLayoutListener(layoutListener);
                 wm.removeView(overlay);
-            } catch (Exception ignored) {
-            }
+            } catch (Exception ignored) { }
             overlay = null;
         }
         super.onDestroy();
