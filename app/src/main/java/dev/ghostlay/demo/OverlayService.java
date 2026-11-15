@@ -26,15 +26,17 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 
 public class OverlayService extends Service {
     static final String ACTION_STOP = "dev.ghostlay.demo.STOP";
     private static final String TAG = "Ghostlay";
     private static final String CHANNEL = "ghostlay";
     private static final int MAX_TRIES = 20;
-    private static final String ESP_URL = "http://127.0.0.1:6969/api/esp";
+    private static final String ESP_HOST = "127.0.0.1";
+    private static final int ESP_PORT = 6969;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager wm;
@@ -199,19 +201,48 @@ public class OverlayService extends Service {
         stopEspPolling();
         espPolling = true;
         espPollThread = new Thread(() -> {
-            while (espPolling && espOverlay != null) {
-                final JSONObject data = fetchEsp();
+            while (espPolling) {
+                Socket sock = null;
+                try {
+                    sock = new Socket();
+                    sock.connect(new InetSocketAddress(ESP_HOST, ESP_PORT), 150);
+                    sock.setTcpNoDelay(true);
+                    sock.setSoTimeout(1000);
+                    OutputStream os = sock.getOutputStream();
+                    os.write(("GET /api/esp/stream HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").getBytes("UTF-8"));
+                    os.flush();
+                    BufferedReader br = new BufferedReader(new InputStreamReader(sock.getInputStream(), "UTF-8"));
+                    // skip HTTP headers
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        if (line.length() == 0) break;
+                    }
+                    while (espPolling && (line = br.readLine()) != null) {
+                        final String payload = line;
+                        final EspOverlayView view = espOverlay;
+                        if (view != null && payload.length() > 0) {
+                            try {
+                                final JSONObject data = new JSONObject(payload);
+                                handler.post(() -> {
+                                    if (espOverlay != null) espOverlay.updateFromJson(data);
+                                });
+                            } catch (Exception ignored) { }
+                        }
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    if (sock != null) {
+                        try { sock.close(); } catch (Exception ignored) { }
+                    }
+                }
+                if (!espPolling) break;
                 final EspOverlayView view = espOverlay;
                 if (view != null) {
-                    handler.post(() -> {
-                        if (espOverlay == null) return;
-                        if (data != null) espOverlay.updateFromJson(data);
-                        else espOverlay.clear();
-                    });
+                    handler.post(() -> { if (espOverlay != null) espOverlay.clear(); });
                 }
-                try { Thread.sleep(16); } catch (InterruptedException ignored) { break; }
+                try { Thread.sleep(100); } catch (InterruptedException ignored) { break; }
             }
-        }, "esp-poll");
+        }, "esp-stream");
         espPollThread.setDaemon(true);
         espPollThread.start();
     }
@@ -246,29 +277,7 @@ public class OverlayService extends Service {
         }
     };
 
-    private JSONObject fetchEsp() {
-        HttpURLConnection conn = null;
-        try {
-            URL url = new URL(ESP_URL);
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(120);
-            conn.setReadTimeout(150);
-            conn.setRequestMethod("GET");
-            conn.setUseCaches(false);
-            conn.setRequestProperty("Connection", "close");
-            if (conn.getResponseCode() != 200) return null;
-            BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) sb.append(line);
-            br.close();
-            return new JSONObject(sb.toString());
-        } catch (Exception e) {
-            return null;
-        } finally {
-            if (conn != null) conn.disconnect();
-        }
-    }
+    // ESP data is received via persistent /api/esp/stream connection in startEspPolling().
 
     private void hideEspOverlay() {
         stopEspPolling();
