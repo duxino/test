@@ -24,6 +24,7 @@ public class EspOverlayView extends View {
         float dist;
         boolean visible;
         boolean bot;
+        boolean aimed;   // current aim-touch target
     }
 
     static class Snapshot {
@@ -33,6 +34,10 @@ public class EspOverlayView extends View {
         String linePos = "Top", boxStyle = "Simple", healthStyle = "Vertical";
         int botColor = 0xFF00FF66;
         int playerColor = 0xFFFF3B30;
+        int aimColor = 0xFFFFC000;
+        int fovColor = 0xFFFFFFFF;
+        boolean aimTouch = false;   // draw the FOV circle only while aim touch is on
+        float aimFov = 500f;        // aim FOV in game pixels (same units as p[].hx/hy)
         float botDist = 500f, playerDist = 500f;
         final List<Player> players = new ArrayList<>();
     }
@@ -47,6 +52,7 @@ public class EspOverlayView extends View {
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textBg = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint alertPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint fovPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     public EspOverlayView(Context context) {
         super(context);
@@ -63,6 +69,8 @@ public class EspOverlayView extends View {
         alertPaint.setColor(0xFFFF3B30);
         alertPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
         alertPaint.setTextAlign(Paint.Align.CENTER);
+        fovPaint.setStyle(Paint.Style.STROKE);
+        fovPaint.setColor(0xFFFFFFFF);
         setWillNotDraw(false);
     }
 
@@ -93,6 +101,10 @@ public class EspOverlayView extends View {
                 s.healthStyle = cfg.optString("healthStyle", "Vertical");
                 s.botColor = parseColor(cfg.optString("botColor", "#00ff66"), 0xFF00FF66);
                 s.playerColor = parseColor(cfg.optString("playerColor", "#ff3b30"), 0xFFFF3B30);
+                s.aimColor = parseColor(cfg.optString("aimColor", "#FFC000"), 0xFFFFC000);
+                s.fovColor = parseColor(cfg.optString("fovColor", "#FFFFFF"), 0xFFFFFFFF);
+                s.aimTouch = cfg.optBoolean("aimTouch", false);
+                s.aimFov = (float) cfg.optDouble("aimFov", 500.0);
                 s.botDist = (float) cfg.optDouble("botDistance", 500.0);
                 s.playerDist = (float) cfg.optDouble("playerDistance", 500.0);
             }
@@ -113,6 +125,7 @@ public class EspOverlayView extends View {
                     p.dist = (float) o.optDouble("d", 0);
                     p.visible = o.optBoolean("v", false);
                     p.bot = o.optBoolean("b", p.name.isEmpty());
+                    p.aimed = o.optBoolean("a", false);
                     s.players.add(p);
                 }
             }
@@ -150,11 +163,19 @@ public class EspOverlayView extends View {
         linePaint.setStrokeWidth(stroke);
         boxPaint.setStrokeWidth(stroke);
 
+        // FOV circle: shown only while Aim Touch is enabled, radius follows the
+        // Aim FOV setting (converted from game pixels to view pixels).
+        if (s.aimTouch && s.aimFov > 1f) {
+            fovPaint.setColor(s.fovColor);
+            fovPaint.setStrokeWidth(Math.max(1f, dp(1.2f)));
+            canvas.drawCircle(vw / 2f, vh / 2f, s.aimFov * sx, fovPaint);
+        }
+
         int drawn = 0;
         boolean alertTrig = false;
 
         for (Player p : s.players) {
-            int color = p.bot ? s.botColor : s.playerColor;
+            int color = p.aimed ? s.aimColor : (p.bot ? s.botColor : s.playerColor);
             float maxDist = p.bot ? s.botDist : s.playerDist;
             if (maxDist > 0 && p.dist > maxDist) continue;
 
