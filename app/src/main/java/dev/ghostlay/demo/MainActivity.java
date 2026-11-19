@@ -23,7 +23,7 @@ public class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
 
         status = new TextView(this);
-        status.setText("Ghostlay: overlay hidden from screen recorders");
+        status.setText("Ghostlay ESP: the module starts this automatically at boot");
         status.setGravity(Gravity.CENTER);
 
         Button start = new Button(this);
@@ -59,6 +59,6 @@ public class MainActivity extends Activity {
             return;
         }
         startForegroundService(new Intent(this, OverlayService.class));
-        status.setText("Running. Drag the white box; then try a screen recorder.");
+        status.setText("Running. The ESP overlay is drawn over the game.");
     }
 }
