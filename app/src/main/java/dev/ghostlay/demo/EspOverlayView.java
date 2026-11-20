@@ -43,6 +43,8 @@ public class EspOverlayView extends View {
     }
 
     private volatile Snapshot snap = new Snapshot();
+    /** False when no usable Typeface exists, in which case every text label is skipped. */
+    private final boolean textOk;
 
     private final Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint boxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -62,16 +64,53 @@ public class EspOverlayView extends View {
         healthBg.setStyle(Paint.Style.FILL);
         healthFg.setStyle(Paint.Style.FILL);
         textPaint.setColor(Color.WHITE);
-        textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
         textBg.setStyle(Paint.Style.FILL);
         textBg.setColor(0x66000000);
         alertPaint.setStyle(Paint.Style.FILL_AND_STROKE);
         alertPaint.setColor(0xFFFF3B30);
-        alertPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        Typeface bold = boldTypeface();
+        textOk = bold != null;
+        if (bold != null) {
+            textPaint.setTypeface(bold);
+            alertPaint.setTypeface(bold);
+        }
         alertPaint.setTextAlign(Paint.Align.CENTER);
         fovPaint.setStyle(Paint.Style.STROKE);
         fovPaint.setColor(0xFFFFFFFF);
         setWillNotDraw(false);
+    }
+
+    /**
+     * Typeface.DEFAULT is null when the overlay runs through app_process on a rom
+     * whose system Resources never finished loading: MIUI's ThemeCompatibility
+     * cannot find /data/system/theme_config/theme_compatibility.xml, MiuiResources
+     * comes up half built and Typeface.create(Typeface.DEFAULT, BOLD) throws NPE.
+     * Try every base family, then a font file, and give up on text at the end.
+     */
+    private static Typeface boldTypeface() {
+        Typeface[] bases = {Typeface.DEFAULT, Typeface.SANS_SERIF, Typeface.MONOSPACE,
+                Typeface.SERIF, Typeface.DEFAULT_BOLD};
+        for (Typeface base : bases) {
+            if (base == null) continue;
+            try {
+                Typeface t = Typeface.create(base, Typeface.BOLD);
+                if (t != null) return t;
+            } catch (Throwable ignored) {
+            }
+        }
+        String[] fonts = {"/system/fonts/MiSans-Bold.ttf", "/system/fonts/Roboto-Bold.ttf",
+                "/system/fonts/NotoSans-Bold.ttf", "/system/fonts/RobotoCondensed-Bold.ttf",
+                "/system/fonts/MiSans-Regular.ttf", "/system/fonts/Roboto-Regular.ttf",
+                "/system/fonts/NotoSans-Regular.ttf"};
+        for (String path : fonts) {
+            try {
+                if (!new java.io.File(path).exists()) continue;
+                Typeface t = Typeface.createFromFile(path);
+                if (t != null) return t;
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
     }
 
     private static int parseColor(String hex, int def) {
@@ -141,7 +180,14 @@ public class EspOverlayView extends View {
     }
 
     private float dp(float v) {
-        return v * getResources().getDisplayMetrics().density;
+        float density = 1f;
+        try {
+            density = getResources().getDisplayMetrics().density;
+        } catch (Throwable ignored) {
+            // half-initialised MiuiResources: fall back to 1x instead of drawing nothing
+        }
+        if (density <= 0f) density = 1f;
+        return v * density;
     }
 
     @Override
@@ -248,7 +294,7 @@ public class EspOverlayView extends View {
             }
 
             float textY = top - dp(3);
-            if (s.name || s.teamId || s.distance) {
+            if (textOk && (s.name || s.teamId || s.distance)) {
                 StringBuilder sb = new StringBuilder();
                 if (s.name) {
                     String nm = (p.name != null && !p.name.isEmpty()) ? p.name : (p.bot ? "BOT" : "Player");
@@ -274,7 +320,7 @@ public class EspOverlayView extends View {
             }
         }
 
-        if (s.showCount) {
+        if (textOk && s.showCount) {
             String label = "Enemies: " + s.count;
             float tw = textPaint.measureText(label);
             float pad = dp(4);
@@ -285,7 +331,7 @@ public class EspOverlayView extends View {
             canvas.drawText(label, bx, by, textPaint);
         }
 
-        if (s.alert && alertTrig && drawn > 0) {
+        if (textOk && s.alert && alertTrig && drawn > 0) {
             alertPaint.setColor(0xFFFF3B30);
             canvas.drawText("ALERT", vw / 2f, dp(42), alertPaint);
         }
