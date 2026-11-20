@@ -25,6 +25,8 @@ public class EspOverlayView extends View {
         boolean visible;
         boolean bot;
         boolean aimed;   // current aim-touch target
+        float angle;     // camera-relative yaw in degrees (0 = front, + = right)
+        boolean radarOnly; // behind the camera: Alert dot only, no box/line
     }
 
     static class Snapshot {
@@ -66,7 +68,7 @@ public class EspOverlayView extends View {
         textPaint.setColor(Color.WHITE);
         textBg.setStyle(Paint.Style.FILL);
         textBg.setColor(0x66000000);
-        alertPaint.setStyle(Paint.Style.FILL_AND_STROKE);
+        alertPaint.setStyle(Paint.Style.FILL);
         alertPaint.setColor(0xFFFF3B30);
         Typeface bold = boldTypeface();
         textOk = bold != null;
@@ -165,6 +167,8 @@ public class EspOverlayView extends View {
                     p.visible = o.optBoolean("v", false);
                     p.bot = o.optBoolean("b", p.name.isEmpty());
                     p.aimed = o.optBoolean("a", false);
+                    p.angle = (float) o.optDouble("ang", 0);
+                    p.radarOnly = o.optBoolean("ro", false);
                     s.players.add(p);
                 }
             }
@@ -217,13 +221,13 @@ public class EspOverlayView extends View {
             canvas.drawCircle(vw / 2f, vh / 2f, s.aimFov * sx, fovPaint);
         }
 
-        int drawn = 0;
-        boolean alertTrig = false;
-
         for (Player p : s.players) {
             int color = p.aimed ? s.aimColor : (p.bot ? s.botColor : s.playerColor);
             float maxDist = p.bot ? s.botDist : s.playerDist;
             if (maxDist > 0 && p.dist > maxDist) continue;
+            // Behind the camera: the server only reports an angle for it, so it
+            // may show up as an Alert dot but never as a box or line.
+            if (p.radarOnly) continue;
 
             float hx = p.hx * sx, hy = p.hy * sy;
             float rx = p.rx * sx, ry = p.ry * sy;
@@ -238,9 +242,6 @@ public class EspOverlayView extends View {
             float cx = (hx + rx) * 0.5f;
             float left = cx - width / 2f;
             float right = cx + width / 2f;
-
-            drawn++;
-            if (p.visible) alertTrig = true;
 
             if (s.line) {
                 float lx, ly;
@@ -320,20 +321,60 @@ public class EspOverlayView extends View {
             }
         }
 
+        // ===== Count: a small square per kind, its count written on it =====
         if (textOk && s.showCount) {
-            String label = "Enemies: " + s.count;
-            float tw = textPaint.measureText(label);
-            float pad = dp(4);
-            float bx = vw / 2f - tw / 2f;
-            float by = dp(22);
-            textPaint.setColor(Color.WHITE);
-            canvas.drawRect(bx - pad, by - textSize, bx + tw + pad, by + pad, textBg);
-            canvas.drawText(label, bx, by, textPaint);
+            int bots = 0, humans = 0;
+            for (Player p : s.players) {
+                if (p.radarOnly) continue;
+                if (p.bot) bots++; else humans++;
+            }
+            float size = dp(15);
+            float gap = dp(6);
+            float top = dp(8);
+            float left = vw / 2f - size - gap / 2f;
+            drawCountChip(canvas, left, top, size, bots, s.botColor);
+            drawCountChip(canvas, left + size + gap, top, size, humans, s.playerColor);
         }
 
-        if (textOk && s.alert && alertTrig && drawn > 0) {
-            alertPaint.setColor(0xFFFF3B30);
-            canvas.drawText("ALERT", vw / 2f, dp(42), alertPaint);
+        // ===== Alert: one small dot per enemy on an invisible ring =====
+        // 0 deg = straight ahead (top of the ring), +90 = the player's right,
+        // +/-180 = behind. No ring is drawn, only the dots.
+        if (s.alert) {
+            float radius = Math.min(vw, vh) * 0.32f;
+            float dot = Math.max(dp(2.5f), stroke * 1.6f);
+            for (Player p : s.players) {
+                double a = Math.toRadians(p.angle);
+                float px = vw / 2f + (float) Math.sin(a) * radius;
+                float py = vh / 2f - (float) Math.cos(a) * radius;
+                int color = p.aimed ? s.aimColor : (p.bot ? s.botColor : s.playerColor);
+                alertPaint.setColor(0x99000000);
+                canvas.drawCircle(px, py, dot + dp(1f), alertPaint);
+                alertPaint.setColor(color);
+                canvas.drawCircle(px, py, dot, alertPaint);
+            }
         }
+    }
+
+    /** One colored square with the count written on it. */
+    private void drawCountChip(Canvas canvas, float left, float top, float size,
+                               int count, int color) {
+        textBg.setColor(0x99000000);
+        canvas.drawRect(left - dp(1), top - dp(1), left + size + dp(1), top + size + dp(1), textBg);
+        boxFillPaint.setColor(color);
+        canvas.drawRect(left, top, left + size, top + size, boxFillPaint);
+
+        textPaint.setColor(countContrast(color));
+        textPaint.setTextSize(dp(10));
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        Paint.FontMetrics fm = textPaint.getFontMetrics();
+        float ty = top + size / 2f - (fm.ascent + fm.descent) / 2f;
+        canvas.drawText(String.valueOf(count), left + size / 2f, ty, textPaint);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+    }
+
+    /** Black text on light squares, white text on dark ones. */
+    private static int countContrast(int color) {
+        int r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
+        return (r * 299 + g * 587 + b * 114) / 1000 > 140 ? 0xFF000000 : 0xFFFFFFFF;
     }
 }
