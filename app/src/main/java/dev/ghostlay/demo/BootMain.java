@@ -55,6 +55,24 @@ public final class BootMain {
     private static final String ESP_HOST = "127.0.0.1";
     private static final int ESP_PORT = 6969;
 
+    /**
+     * Window types tried in order until one is accepted.
+     *
+     * 2038 (TYPE_APPLICATION_OVERLAY) is the clean one, but adding it makes the
+     * system note SYSTEM_ALERT_WINDOW for the calling uid, and uid 0 owns no
+     * package: AppOpsService builds a SyncNotedAppOp with a null package name,
+     * AnnotationValidations throws NPE inside addToDisplayAsUser and the window
+     * never appears. The system types below are allowed for root through
+     * INTERNAL_SYSTEM_WINDOW instead, so no appop is noted for them.
+     */
+    private static final int[] WINDOW_TYPES = {
+            2038,   // TYPE_APPLICATION_OVERLAY
+            2011,   // TYPE_SYSTEM_ERROR
+            2004,   // TYPE_SYSTEM_ALERT
+            2007,   // TYPE_SYSTEM_OVERLAY
+            2003,   // TYPE_PHONE (same policy as SYSTEM_ALERT)
+    };
+
     private BootMain() {
     }
 
@@ -165,13 +183,32 @@ public final class BootMain {
             wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             if (wm == null) throw new IllegalStateException("no WindowManager");
 
+            Throwable last = null;
+            for (int type : WINDOW_TYPES) {
+                try {
+                    attach(type);
+                    Log.i(TAG, "overlay window added with type " + type);
+                    return;
+                } catch (Throwable t) {
+                    last = t;
+                    Log.w(TAG, "window type " + type + " not accepted: " + t);
+                    detach();
+                }
+            }
+            throw new IllegalStateException("no window type accepted", last);
+        }
+
+        /** One addView() attempt with the given window type. */
+        private void attach(int type) {
+            revealed = false;
+            tries = 0;
             view = new EspOverlayView(ctx);
             view.setAlpha(0f);
 
             lp = new WindowManager.LayoutParams(
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    type,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
@@ -184,6 +221,26 @@ public final class BootMain {
             view.getViewTreeObserver().addOnGlobalLayoutListener(layoutListener);
             handler.post(reveal);
             startPolling();
+        }
+
+        /** Removes whatever the failed attempt left behind before the next try. */
+        private void detach() {
+            handler.removeCallbacks(reveal);
+            polling = false;
+            Thread t = pollThread;
+            pollThread = null;
+            if (t != null) t.interrupt();
+            View v = view;
+            view = null;
+            if (v == null) return;
+            try {
+                v.getViewTreeObserver().removeOnGlobalLayoutListener(layoutListener);
+            } catch (Throwable ignored) {
+            }
+            try {
+                wm.removeViewImmediate(v);
+            } catch (Throwable ignored) {
+            }
         }
 
         private final ViewTreeObserver.OnGlobalLayoutListener layoutListener = () -> {
